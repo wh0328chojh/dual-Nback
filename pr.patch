@@ -1,0 +1,240 @@
+```diff
+*** Begin Patch
+*** Add File: vite.config.ts
++import { defineConfig } from 'vite'
++import react from '@vitejs/plugin-react'
++
++// GitHub Pages project path base
++export default defineConfig({
++  plugins: [react()],
++  base: '/dual-Nback/', // ✅ must match repo name exactly (case‑sensitive)
++})
++
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Add File: public/manifest.webmanifest
++{
++  "name": "Dual N-Back",
++  "short_name": "N-Back",
++  "description": "Dual N-Back trainer (iPhone-friendly)",
++  "start_url": ".",
++  "scope": "/dual-Nback/",
++  "display": "standalone",
++  "background_color": "#0b0b0f",
++  "theme_color": "#0b0b0f",
++  "icons": [
++    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
++    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
++    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable any" }
++  ]
++}
++
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Add File: public/sw.js
++// Simple offline cache for app shell
++const CACHE = 'nback-cache-v1';
++const ASSETS = [
++  './',
++  './index.html',
++  './manifest.webmanifest'
++];
++
++self.addEventListener('install', (e) => {
++  e.waitUntil(
++    caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(self.skipWaiting())
++  );
++});
++
++self.addEventListener('activate', (e) => {
++  e.waitUntil(
++    caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE && caches.delete(k)))).then(() => self.clients.claim())
++  );
++});
++
++self.addEventListener('fetch', (e) => {
++  const req = e.request;
++  e.respondWith(
++    caches.match(req).then((hit) => hit || fetch(req).then((res) => {
++      const copy = res.clone();
++      caches.open(CACHE).then((c) => c.put(req, copy));
++      return res;
++    }).catch(() => caches.match('./index.html')))
++  );
++});
++
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Add File: src/registerSW.ts
++export function registerSW() {
++  if ('serviceWorker' in navigator) {
++    window.addEventListener('load', () => {
++      navigator.serviceWorker.register('./sw.js').catch(console.error);
++    });
++  }
++}
++
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Update File: index.html
+@@
+-  <head>
++  <head>
+@@
+-    <meta charset="UTF-8" />
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1" />
++    <meta name="theme-color" content="#0b0b0f" />
++    <link rel="manifest" href="./manifest.webmanifest" />
++    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
++    <meta name="apple-mobile-web-app-capable" content="yes" />
++    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Update File: src/main.tsx
+@@
+-import React from 'react'
+-import ReactDOM from 'react-dom/client'
+-import App from './App.tsx'
++import React from 'react'
++import ReactDOM from 'react-dom/client'
++import App from './App.tsx'
++import { registerSW } from './registerSW'
++
++registerSW();
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Update File: src/App.tsx
+@@
+-import React, { useEffect, useMemo, useRef, useState } from 'react'
++import React, { useEffect, useMemo, useRef, useState } from 'react'
+@@
+-function speak(letter: string, voiceName?: string) {
++function speak(letter: string, voiceName?: string) {
+   try {
+     const u = new SpeechSynthesisUtterance(letter)
+     u.rate = 0.9
+     u.pitch = 1.0
+     if (voiceName) {
+       const voice = window.speechSynthesis.getVoices().find(v => v.name === voiceName)
+       if (voice) u.voice = voice
+     }
+-    window.speechSynthesis.cancel() // prevent queue pile-up (❌ iOS mute issue)
+     window.speechSynthesis.speak(u)
+   } catch {}
+ }
+@@
+-  function start() {
+-    window.speechSynthesis.cancel()
+-    setAudioEnabled(true)
+-    resetBlock()
+-    setRunning(true)
+-  }
++  function start() {
++    // iOS: unlock TTS with a tiny dummy utterance
++    try {
++      const dummy = new SpeechSynthesisUtterance('.')
++      dummy.volume = 0.01
++      dummy.rate = 1
++      dummy.pitch = 1
++      window.speechSynthesis.speak(dummy)
++    } catch {}
++    setAudioEnabled(true)
++    resetBlock()
++    setRunning(true)
++  }
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Update File: src/App.tsx
+@@
+   const [voice, setVoice] = useState<string | undefined>(undefined)
++  const [useSpeech, setUseSpeech] = useState(false) // Beep/TTS toggle
++  const audioCtxRef = useRef<AudioContext | null>(null)
++  const beepRef = useRef<(freq?: number) => void>(() => {})
+@@
+-    // Speak letter
+-    if (audioEnabled) speak(next.letter, voice)
++    // Audio cue (beep fallback or TTS)
++    if (audioEnabled) {
++      if (useSpeech) {
++        speak(next.letter, voice)
++      } else {
++        const idx = LETTER_POOL.indexOf(next.letter)
++        const freq = 500 + (idx >= 0 ? idx * 30 : 0)
++        beepRef.current(freq)
++      }
++    }
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Update File: src/App.tsx
+@@
+   function resetBlock(nextN?: number) {
+@@
+   }
++
++  // Init WebAudio on first Start tap
++  useEffect(() => {
++    const onTap = () => {
++      if (!audioCtxRef.current) {
++        // @ts-ignore
++        const Ctx = window.AudioContext || window.webkitAudioContext
++        const ctx: AudioContext = new Ctx()
++        audioCtxRef.current = ctx
++        beepRef.current = makeBeep(ctx)
++      }
++      audioCtxRef.current?.resume?.()
++      window.removeEventListener('pointerdown', onTap)
++    }
++    window.addEventListener('pointerdown', onTap, { once: true })
++    return () => window.removeEventListener('pointerdown', onTap)
++  }, [])
+*** End Patch
+```
+
+```diff
+*** Begin Patch
+*** Update File: src/App.tsx
+@@
+         <details className="mb-3 rounded-2xl bg-gray-900 p-3 border border-gray-800">
+           <summary className="cursor-pointer select-none font-medium">Settings</summary>
+           <div className="mt-3 grid gap-3">
+@@
+             <div className="flex items-center justify-between gap-3">
+               <label className="opacity-80">Block length</label>
+               <input type="number" min={12} step={2} value={blockLen} onChange={e => setBlockLen(Math.max(8, parseInt(e.target.value||"20", 10)))} className="bg-gray-800 rounded-xl px-3 py-1 w-24" />
+             </div>
++            <div className="flex items-center justify-between gap-3">
++              <label className="opacity-80">Audio mode</label>
++              <select value={useSpeech ? "speech" : "beep"} onChange={e => setUseSpeech(e.target.value === "speech")} className="bg-gray-800 rounded-xl px-3 py-1 w-full">
++                <option value="beep">Beep (WebAudio) – iOS stable</option>
++                <option value="speech">Speech (TTS)</option>
++              </select>
++            </div>
+           </div>
+         </details>
+*** End Patch
+```
